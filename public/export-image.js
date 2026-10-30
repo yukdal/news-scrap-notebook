@@ -1,0 +1,26 @@
+const W=1080,H=1700,PAD=76,FONT='"Malgun Gothic","Apple SD Gothic Neo",sans-serif';
+const BG='#fffdf7',INK='#283128',ACCENT='#b84b25',MUTED='#6c7664';
+function wrap(ctx,text,max){const result=[];for(const paragraph of String(text||'').split('\n')){if(!paragraph){result.push('');continue;}let line='';for(const char of Array.from(paragraph)){if(ctx.measureText(line+char).width>max&&line){result.push(line);line=char;}else line+=char;}result.push(line);}return result;}
+async function loadImage(src){const image=new Image();image.src=src;await image.decode();return image;}
+const canvasBlob=c=>new Promise((resolve,reject)=>c.toBlob(b=>b?resolve(b):reject(Error('이미지를 만들지 못했어요.')),'image/png'));
+export async function createNoteImages(note,{includeOptions=true,includeNickname=true,includeArticle=true}={}){
+ await document.fonts.ready;const pages=[];let canvas,ctx,y;
+ function page(){if(pages.length>=50)throw Error('기록이 길어 50장을 초과했어요. 내용을 나누어 내보내 주세요.');canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;ctx=canvas.getContext('2d');ctx.fillStyle=BG;ctx.fillRect(0,0,W,H);ctx.fillStyle=ACCENT;ctx.font=`bold 22px ${FONT}`;ctx.fillText('경제신문읽기 · 경제신문 스크랩',PAD,65);ctx.strokeStyle='#d9ddcf';ctx.beginPath();ctx.moveTo(PAD,89);ctx.lineTo(W-PAD,89);ctx.stroke();y=135;pages.push(canvas);}
+ function ensure(height){if(y+height>H-110)page();}
+ function text(value,size=30,color=INK,weight='normal',lineHeight=49){ctx.font=`${weight} ${size}px ${FONT}`;for(const line of wrap(ctx,value,W-PAD*2)){ensure(lineHeight);ctx.font=`${weight} ${size}px ${FONT}`;ctx.fillStyle=color;ctx.fillText(line,PAD,y);y+=lineHeight;}}
+ function block(label,value){ensure(105);y+=24;text(label,25,ACCENT,'bold',42);text(value||'아직 작성하지 않았어요.',30,value?INK:MUTED,'normal',49);y+=18;ctx.strokeStyle='#e4e5da';ctx.beginPath();ctx.moveTo(PAD,y);ctx.lineTo(W-PAD,y);ctx.stroke();y+=13;}
+ page();text(note.title||'오늘의 경제신문',40,INK,'bold',61);y+=10;text([note.date,note.paper,includeNickname?note.nickname:''].filter(Boolean).join('  ·  '),23,MUTED,'normal',38);y+=20;
+ if(includeArticle){for(const a of note.attachments||[]){const image=await loadImage(a.data||a.url);const scale=Math.min((W-PAD*2)/image.width,650/image.height);const width=image.width*scale,height=image.height*scale;ensure(height+32);ctx.drawImage(image,PAD+(W-PAD*2-width)/2,y,width,height);y+=height+30;}}
+ if(note.type==='weekly'){for(const [key,label] of [['keywords','이번 주 반복해서 나온 키워드'],['memorable','가장 기억에 남는 기사 하나'],['newWords','이번 주 새로 안 단어'],['watch','다음 주에 지켜볼 것']])block(label,note[key]);}
+ else {block('WHAT  ·  무슨 일이 있었나',note.what);block('WHY  ·  왜 그런 일이 생겼나',note.why);block('SO WHAT  ·  그래서 어떻게 되는가',note.soWhat);if(includeOptions){if(note.recommended)block('추천기사','추천기사로 골랐어요');if(note.terms)block('오늘 모르는 용어',note.terms);if(note.thought)block('내 생각 한 줄',note.thought);}}
+ const blobs=[];for(let i=0;i<pages.length;i++){const c=pages[i],cx=c.getContext('2d');cx.font=`20px ${FONT}`;cx.fillStyle=MUTED;cx.fillText('나의 언어로 기록한 오늘',PAD,H-47);cx.textAlign='right';cx.fillText(`${i+1} / ${pages.length}`,W-PAD,H-47);cx.textAlign='left';blobs.push(await canvasBlob(c));}return blobs;
+}
+export async function openImageExport(dialog,note,esc){
+ let urls=[],generation=0;
+ function cleanup(){for(const u of urls)URL.revokeObjectURL(u);urls=[];generation++;}
+ dialog.oncancel=null;dialog.onclose=cleanup;
+ dialog.innerHTML=`<div class="export-dialog"><div class="section-head"><div><span class="eyebrow">READY TO SHARE</span><h2 id="dialog-title">인증 이미지 미리보기</h2></div><button class="icon-button" data-export-close aria-label="미리보기 닫기">×</button></div><p class="micro">이미지를 저장한 뒤 오픈채팅방에 직접 올려주세요. 이미지 생성은 인증 완료와 별개예요.</p><div class="export-options"><label><input type="checkbox" data-export="options" checked> 선택 항목 포함</label><label><input type="checkbox" data-export="nickname" checked> 닉네임 포함</label><label><input type="checkbox" data-export="article" checked> 기사 이미지 포함</label></div><div id="export-status" role="status">이미지를 만들고 있어요…</div><div id="export-previews"></div></div>`;
+ dialog.querySelector('[data-export-close]').onclick=()=>dialog.close();
+ async function generate(){const current=++generation;for(const u of urls)URL.revokeObjectURL(u);urls=[];dialog.querySelector('#export-status').textContent='이미지를 만들고 있어요…';dialog.querySelector('#export-previews').replaceChildren();try{const blobs=await createNoteImages(note,{includeOptions:dialog.querySelector('[data-export=options]').checked,includeNickname:dialog.querySelector('[data-export=nickname]').checked,includeArticle:dialog.querySelector('[data-export=article]').checked});if(current!==generation||!dialog.open)return;urls=blobs.map(b=>URL.createObjectURL(b));dialog.querySelector('#export-status').textContent=`총 ${urls.length}장 · 긴 기록은 여러 장으로 나눴어요.`;dialog.querySelector('#export-previews').innerHTML=urls.map((u,i)=>`<figure><img src="${u}" alt="인증 이미지 ${i+1}"><figcaption><span>${i+1} / ${urls.length}</span><a class="button primary small" href="${u}" download="${esc('스크랩-'+note.date+'-'+(i+1)+'.png')}">이 이미지 저장</a></figcaption></figure>`).join('');}catch(e){if(current===generation)dialog.querySelector('#export-status').textContent=e.message||'이미지를 만들지 못했어요. 기사 이미지 연결 상태를 확인해 주세요.';}}
+ for(const input of dialog.querySelectorAll('input'))input.onchange=generate;dialog.showModal();await generate();
+}
